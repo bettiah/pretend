@@ -15,7 +15,11 @@ export function Put(url: string, appendQuery = false): MethodDecorator {
   return methodDecoratorFactory('PUT', url, true, appendQuery);
 }
 
-export function Delete(url: string, sendBody = false, appendQuery = false): MethodDecorator {
+export function Delete(
+  url: string,
+  sendBody = false,
+  appendQuery = false
+): MethodDecorator {
   return methodDecoratorFactory('DELETE', url, sendBody, appendQuery);
 }
 
@@ -23,8 +27,27 @@ export function Patch(url: string): MethodDecorator {
   return methodDecoratorFactory('PATCH', url, true, false);
 }
 
-export function Headers(headers: string|string[]): MethodDecorator {
+export function Headers(headers: string | string[]): MethodDecorator {
   return headerDecoratorFactory(headers);
+}
+
+export function QueryParam(name: string, options?: any): Function {
+  return (target: any, property: string, parameter: number) => {
+    if (!target.__pretend_query__) {
+      Object.defineProperty(target, '__pretend_query__', {
+        enumerable: false,
+        value: {}
+      });
+    }
+    if (!target.__pretend_query__[property]) {
+      target.__pretend_query__[property] = [];
+    }
+    target.__pretend_query__[property].push({
+      type: 'Query',
+      name,
+      parameter
+    });
+  };
 }
 
 export function FormData(name: string): ParameterDecorator {

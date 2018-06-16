@@ -1,8 +1,19 @@
-export {Get, Post, Put, Delete, Headers, Patch, FormData} from './decorators';
+export {
+  Get,
+  Post,
+  Put,
+  Delete,
+  Headers,
+  Patch,
+  FormData,
+  QueryParam
+} from './decorators';
 
 export type IPretendDecoder = (response: Response) => Promise<any>;
-export type IPretendRequest = { url: string, options: RequestInit };
-export type IPretendRequestInterceptor = (request: IPretendRequest) => IPretendRequest;
+export type IPretendRequest = { url: string; options: RequestInit };
+export type IPretendRequestInterceptor = (
+  request: IPretendRequest
+) => IPretendRequest;
 
 export interface Interceptor {
   (chain: Chain, request: IPretendRequest): Promise<any>;
@@ -17,11 +28,14 @@ interface Instance {
     baseUrl: string;
     interceptors: Interceptor[];
     perRequest?: {
-      headers?: {[name: string]: string[]};
+      headers?: { [name: string]: string[] };
     };
     parameters: {
-      [method: string]: FormDataParameter[]
-    }
+      [method: string]: FormDataParameter[];
+    };
+    queries: {
+      [method: string]: QueryParameter[];
+    };
   };
 }
 
@@ -31,12 +45,26 @@ interface FormDataParameter {
   parameter: number;
 }
 
+interface QueryParameter {
+  type: 'Query';
+  name: string;
+  parameter: number;
+}
+
 function createUrl(url: string, args: any[]): [string, number] {
   let i = 0;
-  return [url
-    .split('/')
-    .map(part => (part.startsWith(':') || part.startsWith('{')) && i <= args.length ? args[i++] : part)
-    .join('/'), args.length === 0 ? -1 : i];
+  return [
+    url
+      .split('/')
+      .map(
+        part =>
+          (part.startsWith(':') || part.startsWith('{')) && i <= args.length
+            ? args[i++]
+            : part
+      )
+      .join('/'),
+    args.length === 0 ? -1 : i
+  ];
 }
 
 function createQuery(parameters: object): string {
@@ -53,15 +81,43 @@ function filterFormData(args: any[], parameters?: FormDataParameter[]): any[] {
   });
 }
 
-function buildUrl(tmpl: string, args: any[], appendQuery: boolean): [string, number] {
+function argsArrayToObj(
+  args: any[],
+  start: number,
+  queries?: QueryParameter[]
+): any[] {
+  const ret = args.slice(0, start);
+  if (args[start] instanceof Object) {
+    ret[start] = args[start];
+  } else {
+    ret[start] = {};
+  }
+  if (queries) {
+    for (const query of queries) {
+      ret[start][query.name] = args[query.parameter];
+    }
+  }
+  return ret;
+}
+
+function buildUrl(
+  tmpl: string,
+  args: any[],
+  appendQuery: boolean,
+  queries?: QueryParameter[]
+): [string, number] {
   const [url, queryOrBodyIndex] = createUrl(tmpl, args);
-  const query = createQuery(appendQuery && queryOrBodyIndex > -1 ? args[queryOrBodyIndex] : {});
+  // remaining args are for query
+  args = argsArrayToObj(args, queryOrBodyIndex, queries);
+  const query = createQuery(
+    appendQuery && queryOrBodyIndex > -1 ? args[queryOrBodyIndex] : {}
+  );
   return [`${url}${query}`, queryOrBodyIndex];
 }
 
 function prepareHeaders(instance: Instance): Headers {
   const headers = new Headers();
-  const {perRequest} = instance.__Pretend__;
+  const { perRequest } = instance.__Pretend__;
   if (perRequest && perRequest.headers) {
     Object.keys(perRequest.headers).forEach(name => {
       perRequest.headers![name].forEach(value => {
@@ -72,15 +128,25 @@ function prepareHeaders(instance: Instance): Headers {
   return headers;
 }
 
-function chainFactory(interceptors: Interceptor[]): (request: IPretendRequest) => Promise<Response> {
+function chainFactory(
+  interceptors: Interceptor[]
+): (request: IPretendRequest) => Promise<Response> {
   let i = 0;
   return function chainStep(request: IPretendRequest): Promise<Response> {
     return interceptors[i++](chainStep, request);
   };
 }
 
-function execute(instance: Instance, method: string, tmpl: string, args: any[], sendBody: boolean,
-    appendQuery: boolean, parameters?: FormDataParameter[]): Promise<any> {
+function execute(
+  instance: Instance,
+  method: string,
+  tmpl: string,
+  args: any[],
+  sendBody: boolean,
+  appendQuery: boolean,
+  parameters?: FormDataParameter[],
+  queries?: QueryParameter[]
+): Promise<any> {
   const createBody = () => {
     if (parameters) {
       const formData = new FormData();
@@ -92,10 +158,14 @@ function execute(instance: Instance, method: string, tmpl: string, args: any[], 
       });
       return formData;
     }
-    return sendBody ? JSON.stringify(args[appendQuery ? queryOrBodyIndex + 1 : queryOrBodyIndex]) : undefined;
+    return sendBody
+      ? JSON.stringify(
+          args[appendQuery ? queryOrBodyIndex + 1 : queryOrBodyIndex]
+        )
+      : undefined;
   };
   const urlParams = filterFormData(args, parameters);
-  const createUrlResult = buildUrl(tmpl, urlParams, appendQuery);
+  const createUrlResult = buildUrl(tmpl, urlParams, appendQuery, queries);
   const url = createUrlResult[0];
   const queryOrBodyIndex = createUrlResult[1];
   const headers = prepareHeaders(instance);
@@ -115,9 +185,17 @@ function execute(instance: Instance, method: string, tmpl: string, args: any[], 
 /**
  * @internal
  */
-export function methodDecoratorFactory(method: string, url: string, sendBody: boolean,
-    appendQuery: boolean): MethodDecorator {
-  return (_target: object, property: string, descriptor: TypedPropertyDescriptor<any>) => {
+export function methodDecoratorFactory(
+  method: string,
+  url: string,
+  sendBody: boolean,
+  appendQuery: boolean
+): MethodDecorator {
+  return (
+    _target: object,
+    property: string,
+    descriptor: TypedPropertyDescriptor<any>
+  ) => {
     descriptor.value = function(this: Instance, ...args: any[]): Promise<any> {
       return execute(
         this,
@@ -126,7 +204,8 @@ export function methodDecoratorFactory(method: string, url: string, sendBody: bo
         args,
         sendBody,
         appendQuery,
-        (this.__Pretend__.parameters || {})[property]
+        (this.__Pretend__.parameters || {})[property],
+        (this.__Pretend__.queries || {})[property]
       );
     };
     return descriptor;
@@ -136,14 +215,20 @@ export function methodDecoratorFactory(method: string, url: string, sendBody: bo
 /**
  * @internal
  */
-export function headerDecoratorFactory(headers: string|string[]): MethodDecorator {
-  return (_target: object, _propertyKey: string, descriptor: TypedPropertyDescriptor<any>) => {
+export function headerDecoratorFactory(
+  headers: string | string[]
+): MethodDecorator {
+  return (
+    _target: object,
+    _propertyKey: string,
+    descriptor: TypedPropertyDescriptor<any>
+  ) => {
     const originalFunction: (...args: any[]) => Promise<any> = descriptor.value;
     descriptor.value = function(this: Instance, ...args: any[]): Promise<any> {
-      return Promise.resolve()
-        .then(() => {
-          this.__Pretend__.perRequest = {
-            headers: (Array.isArray(headers) ? headers : [headers]).reduce((akku, header) => {
+      return Promise.resolve().then(() => {
+        this.__Pretend__.perRequest = {
+          headers: (Array.isArray(headers) ? headers : [headers]).reduce(
+            (akku, header) => {
               const match = header.match(/([^:]+): *(.*)/);
               if (!match) {
                 throw new Error(`Invalid header format for '${header}'`);
@@ -154,30 +239,34 @@ export function headerDecoratorFactory(headers: string|string[]): MethodDecorato
               }
               akku[name].push(value);
               return akku;
-            }, {})
-          };
-          return (originalFunction.apply(this, args) as Promise<any>)
-            .then(result => {
-              this.__Pretend__.perRequest = undefined;
-              return result;
-            })
-            .catch(error => {
-              this.__Pretend__.perRequest = undefined;
-              throw error;
-            });
-        });
+            },
+            {}
+          )
+        };
+        return (originalFunction.apply(this, args) as Promise<any>)
+          .then(result => {
+            this.__Pretend__.perRequest = undefined;
+            return result;
+          })
+          .catch(error => {
+            this.__Pretend__.perRequest = undefined;
+            throw error;
+          });
+      });
     };
     return descriptor;
   };
 }
 
 export class Pretend {
-
   private static readonly FetchInterceptor: Interceptor =
     // tslint:disable-next-line
-    (_chain: Chain, request: IPretendRequest) => fetch(request.url, request.options);
-  public static readonly JsonDecoder: IPretendDecoder = (response: Response) => response.json();
-  public static readonly TextDecoder: IPretendDecoder = (response: Response) => response.text();
+    (_chain: Chain, request: IPretendRequest) =>
+      fetch(request.url, request.options);
+  public static readonly JsonDecoder: IPretendDecoder = (response: Response) =>
+    response.json();
+  public static readonly TextDecoder: IPretendDecoder = (response: Response) =>
+    response.text();
 
   public static builder(): Pretend {
     return new Pretend();
@@ -191,7 +280,9 @@ export class Pretend {
     return this;
   }
 
-  public requestInterceptor(requestInterceptor: IPretendRequestInterceptor): this {
+  public requestInterceptor(
+    requestInterceptor: IPretendRequestInterceptor
+  ): this {
     this.interceptors.push((chain: Chain, request: IPretendRequest) => {
       return chain(requestInterceptor(request));
     });
@@ -200,11 +291,12 @@ export class Pretend {
 
   public basicAuthentication(username: string, password: string): this {
     const usernameAndPassword = `${username}:${password}`;
-    const auth = 'Basic '
-      + (typeof (global as any).btoa !== 'undefined'
+    const auth =
+      'Basic ' +
+      (typeof (global as any).btoa !== 'undefined'
         ? (global as any).btoa(usernameAndPassword)
         : Buffer.from(usernameAndPassword, 'binary').toString('base64'));
-    this.requestInterceptor((request) => {
+    this.requestInterceptor(request => {
       (request.options.headers as Headers).set('Authorization', auth);
       return request;
     });
@@ -216,7 +308,7 @@ export class Pretend {
     return this;
   }
 
-  public target<T>(descriptor: {new(): T}, baseUrl: string): T {
+  public target<T>(descriptor: { new (): T }, baseUrl: string): T {
     if (this.decoder) {
       // if we have a decoder, the first thing to do with a response is to decode it
       this.interceptors.push((chain: Chain, request: IPretendRequest) => {
@@ -228,11 +320,13 @@ export class Pretend {
 
     const instance = new descriptor() as T & Instance;
     instance.__Pretend__ = {
-      baseUrl: baseUrl.endsWith('/') ? baseUrl.substring(0, baseUrl.length - 1) : baseUrl,
+      baseUrl: baseUrl.endsWith('/')
+        ? baseUrl.substring(0, baseUrl.length - 1)
+        : baseUrl,
       interceptors: this.interceptors,
-      parameters: descriptor.prototype.__pretend_parameter__
+      parameters: descriptor.prototype.__pretend_parameter__,
+      queries: descriptor.prototype.__pretend_query__
     };
     return instance;
   }
-
 }
