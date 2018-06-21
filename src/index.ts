@@ -94,7 +94,10 @@ function argsArrayToObj(
   }
   if (queries) {
     for (const query of queries) {
-      ret[start][query.name] = args[query.parameter];
+      // dont send empty parameters
+      if (args[query.parameter] !== '') {
+        ret[start][query.name] = args[query.parameter];
+      }
     }
   }
   return ret;
